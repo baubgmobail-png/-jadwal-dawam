@@ -1,19 +1,19 @@
 
-const STORAGE_KEY = 'jadwal_dawam_v1';
+const STORAGE_KEY = 'jadwal_dawam_v2';
 
 const DEFAULT_STATE = {
-  version: 1,
+  version: 2,
   settings: {
-    baseSalary: 400,
-    socialSecurityBase: 503,
+    baseSalary: 0,
+    socialSecurityBase: 0,
     socialSecurityRate: 0.075,
-    savingsRate: 0.02,
-    takaful: 3,
+    savingsRate: 0,
+    takaful: 0,
     dailyHours: 9.6,
     otWorkMultiplier: 1.25,
     otHolidayMultiplier: 1.5,
     salaryDivisorDays: 30,
-    nightAllowance: 20,
+    nightAllowance: 0,
     cycleStartShift: 'مسائي',
     cycleStartDate: '2026-07-02',
     weeklyOff1: 'الثلاثاء',
@@ -22,35 +22,40 @@ const DEFAULT_STATE = {
     deductShortage: false,
     sickBalance: 14,
     casualBalance: 0,
-    transportAllowance: 70,
+    transportAllowance: 0,
     otDivisorHours: 8,
-    year: 2026,
+    year: new Date().getFullYear(),
     shiftSystem: 'تناوب أسبوعي'
   },
-  period: { from: '2026-07-12', to: '2026-08-03' },
+  period: defaultPeriod(),
   shiftChanges: [],
   salaryIncreases: [],
-  records: {
-    '2026-07-02':{in:'21:30',out:'07:00'}, '2026-07-03':{in:'21:30',out:'07:00'},
-    '2026-07-04':{in:'21:30',out:'07:00'}, '2026-07-05':{in:'21:30',out:'07:00'},
-    '2026-07-06':{in:'21:30',out:'07:00'},
-    '2026-07-09':{in:'07:00',out:'16:30'}, '2026-07-10':{in:'07:00',out:'16:30'},
-    '2026-07-11':{in:'07:00',out:'16:30'},
-    '2026-07-12':{in:'07:00',out:'19:00'}, '2026-07-13':{in:'07:00',out:'19:00'},
-    '2026-07-16':{in:'19:00',out:'07:00'}, '2026-07-17':{in:'19:00',out:'07:00'},
-    '2026-07-18':{in:'19:00',out:'07:00'}, '2026-07-19':{in:'19:00',out:'07:00'},
-    '2026-07-20':{in:'19:00',out:'07:00'},
-    '2026-07-23':{in:'07:00',out:'16:30'}, '2026-07-24':{in:'07:00',out:'16:30'},
-    '2026-07-25':{in:'07:00',out:'16:30'},
-    '2026-07-26':{in:'07:00',out:'19:00'}, '2026-07-27':{in:'07:00',out:'19:00'},
-    '2026-07-30':{in:'19:00',out:'07:00'}, '2026-07-31':{in:'19:00',out:'07:00'},
-    '2026-08-01':{in:'19:00',out:'07:00'}, '2026-08-02':{in:'19:00',out:'07:00'},
-    '2026-08-03':{in:'19:00',out:'07:00'}
-  }
+  records: {}
 };
 
+const SHIFT_RULES = {
+  'صباحي': {
+    normalStart:'07:00', normalEnd:'17:30',
+    otStart:'17:30', otEnd:'19:00',
+    fullNormalHours:9.6, fullOtHours:2.4,
+    normalIn:'07:00', normalOut:'17:30', extraIn:'07:00', extraOut:'19:00'
+  },
+  'مسائي': {
+    normalStart:'21:30', normalEnd:'07:00',
+    otStart:'19:00', otEnd:'21:30',
+    fullNormalHours:9.6, fullOtHours:2.4,
+    normalIn:'21:30', normalOut:'07:00', extraIn:'19:00', extraOut:'07:00'
+  }
+};
 const WEEKDAYS = ['الأحد','الإثنين','الثلاثاء','الأربعاء','الخميس','الجمعة','السبت'];
 const DAY_TYPES = ['دوام','عطلة أسبوعية','عطلة رسمية','إجازة مرضية','إجازة عرضية','غياب'];
+
+function defaultPeriod(){
+  const now=new Date(), y=now.getFullYear(), m=now.getMonth();
+  const from=toISODate(new Date(y,m,1));
+  const to=toISODate(new Date(y,m+1,0));
+  return {from,to};
+}
 
 function deepClone(x){ return JSON.parse(JSON.stringify(x)); }
 function loadState(){
@@ -124,21 +129,67 @@ function calcWorkedHours(tin,tout){
   let a=ih*60+im,b=oh*60+om; let mins=b-a; if(mins<0) mins+=1440;
   return mins/60;
 }
+function minuteOfDay(t){
+  if(!t) return null;
+  const [h,m]=t.split(':').map(Number);
+  return h*60+m;
+}
+function absoluteWindow(start,end,anchorShift){
+  let a=minuteOfDay(start), b=minuteOfDay(end);
+  if(anchorShift==='مسائي'){
+    // Night-shift date starts in the evening and may end after midnight.
+    if(a < 12*60) a += 1440;
+    if(b < 12*60) b += 1440;
+  } else if(b<a) b+=1440;
+  return [a,b];
+}
+function punchWindow(tin,tout,shift){
+  if(!tin||!tout) return null;
+  let a=minuteOfDay(tin), b=minuteOfDay(tout);
+  if(shift==='مسائي'){
+    if(a < 12*60) a += 1440;
+    if(b < 12*60) b += 1440;
+  }
+  if(b<a) b+=1440;
+  return [a,b];
+}
+function overlapMinutes(a,b,c,d){ return Math.max(0,Math.min(b,d)-Math.max(a,c)); }
+function calcScheduledWork(r,shift,daily){
+  const rule=SHIFT_RULES[shift];
+  const punch=punchWindow(r.in,r.out,shift);
+  if(!rule || !punch) return {normal:0,ot125:0,shortage:0,actual:null,clockActual:calcWorkedHours(r.in,r.out)};
+  const [pIn,pOut]=punch;
+  const [nIn,nOut]=absoluteWindow(rule.normalStart,rule.normalEnd,shift);
+  const [oIn,oOut]=absoluteWindow(rule.otStart,rule.otEnd,shift);
+  const regularWindowMinutes=nOut-nIn;
+  const regularWorkedMinutes=overlapMinutes(pIn,pOut,nIn,nOut);
+  // A complete regular shift always credits 9.6 h. Missing clock time is counted 1:1
+  // as shortage, so lateness/early leave never consumes overtime worked in the OT window.
+  const missingRegularHours=Math.max(regularWindowMinutes-regularWorkedMinutes,0)/60;
+  const normal=Math.max(0,Math.min(daily,daily-missingRegularHours));
+  const shortage=Math.max(daily-normal,0);
+  const otWindowMinutes=Math.max(oOut-oIn,1);
+  const otWorkedMinutes=overlapMinutes(pIn,pOut,oIn,oOut);
+  // Company full OT block is 2.4 payroll hours; partial OT is proportional to that block.
+  const ot125=Math.min(rule.fullOtHours,(otWorkedMinutes/otWindowMinutes)*rule.fullOtHours);
+  return {normal,ot125,shortage,actual:normal+ot125,clockActual:calcWorkedHours(r.in,r.out)};
+}
 function calcDay(date, overrideRecord=null){
   const r=overrideRecord || state.records[date] || {};
   const dayType=r.dayTypeOverride || autoDayType(date);
   const shift=r.shiftOverride || autoShift(date,dayType);
-  const actual=calcWorkedHours(r.in,r.out);
+  const clockActual=calcWorkedHours(r.in,r.out);
   const daily=Number(state.settings.dailyHours)||9.6;
-  let normal=0, ot125=0, ot150=0, shortage=0;
+  let actual=null, normal=0, ot125=0, ot150=0, shortage=0;
   if(dayType==='دوام'){
-    normal=actual===null?0:Math.min(actual,daily);
-    ot125=actual===null?0:Math.max(actual-daily,0);
-    shortage=actual===null?0:Math.max(daily-actual,0);
+    const x=calcScheduledWork(r,shift,daily);
+    actual=x.actual; normal=x.normal; ot125=x.ot125; shortage=x.shortage;
   }else if(dayType==='إجازة مرضية'||dayType==='إجازة عرضية'){
-    normal=daily;
+    normal=daily; actual=daily;
   }else if(dayType==='عطلة أسبوعية'||dayType==='عطلة رسمية'){
-    ot150=actual===null?0:actual;
+    ot150=clockActual===null?0:clockActual; actual=clockActual;
+  }else if(dayType==='غياب'){
+    actual=0;
   }
   const salary=effectiveSalary(date);
   const normalRate=salary/(Number(state.settings.salaryDivisorDays)||30)/daily;
@@ -149,11 +200,14 @@ function calcDay(date, overrideRecord=null){
   if((r.in&&!r.out)||(!r.in&&r.out)) status='تحقق من الوقت';
   else if(dayType==='دوام'&&!r.in&&!r.out) status='ناقص وقت';
   else if((dayType==='عطلة أسبوعية'||dayType==='عطلة رسمية')&&!r.in&&!r.out) status='لا يوجد دوام';
+  else if(dayType==='دوام'&&shortage>0&&ot125>0) status='إضافي + مغادرة';
+  else if(dayType==='دوام'&&shortage>0) status='مغادرة/تأخير';
   else if(ot125+ot150>0) status='إضافي تلقائي';
-  return {date,weekday:weekday(date),dayType,shift,actual,normal,ot125,ot150,shortage,ot125Value,ot150Value,status,
+  return {date,weekday:weekday(date),dayType,shift,actual,clockActual,normal,ot125,ot150,shortage,ot125Value,ot150Value,status,
           absenceValue: dayType==='غياب'? salary/(Number(state.settings.salaryDivisorDays)||30):0,
           shortageValue: shortage*normalRate, notes:r.notes||'', in:r.in||'', out:r.out||''};
 }
+
 
 function calcSummary(from,to){
   const dates=dateRange(from,to), s=state.settings;
@@ -183,7 +237,7 @@ function calcSummary(from,to){
     sick:rows.filter(r=>r.dayType==='إجازة مرضية').length,
     casual:rows.filter(r=>r.dayType==='إجازة عرضية').length,
     absent:rows.filter(r=>r.dayType==='غياب').length,
-    review:rows.filter(r=>r.status==='ناقص وقت'||r.status==='تحقق من الوقت').length
+    review:rows.filter(r=>r.status==='ناقص وقت'||r.status==='تحقق من الوقت'||r.shortage>0).length
   };
   return {days:dates.length,fraction,base,transport,night,ot125,ot150,gross,social,savings,takaful,absence,shortage,deductions,net,stats};
 }
@@ -209,7 +263,7 @@ function renderHome(){
     </div>`).join('') || '<div class="empty">لا يوجد دوام قريب.</div>';
 }
 function cardClass(r){
-  if(r.status==='ناقص وقت'||r.status==='تحقق من الوقت') return 'warn';
+  if(r.status==='ناقص وقت'||r.status==='تحقق من الوقت'||r.shortage>0) return 'warn';
   if(r.dayType==='عطلة أسبوعية'||r.dayType==='عطلة رسمية') return 'off';
   if(r.dayType.includes('إجازة')||r.dayType==='غياب') return 'leave';
   return '';
@@ -300,6 +354,44 @@ function timeOptions(){
   for(let h=0;h<24;h++) for(let m of [0,30]){ const t=`${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}`; x+=`<option value="${t}">${t}</option>`; }
   return x;
 }
+function resolvedModalShift(){
+  if(!editingDate) return '';
+  const dayType=document.getElementById('editDayType').value || autoDayType(editingDate);
+  return document.getElementById('editShift').value || autoShift(editingDate,dayType);
+}
+function updateQuickButtons(){
+  const shift=resolvedModalShift(), rule=SHIFT_RULES[shift];
+  const tin=document.getElementById('editIn').value, tout=document.getElementById('editOut').value;
+  let active='manual';
+  if(rule && tin===rule.normalIn && tout===rule.normalOut) active='normal';
+  if(rule && tin===rule.extraIn && tout===rule.extraOut) active='extra';
+  document.querySelectorAll('[data-quick-entry]').forEach(b=>b.classList.toggle('active',b.dataset.quickEntry===active));
+}
+function applyQuickEntry(mode){
+  if(!editingDate) return;
+  if(mode==='manual'){
+    updateQuickButtons();
+    document.getElementById('editIn').focus();
+    return;
+  }
+  let dayType=document.getElementById('editDayType').value || autoDayType(editingDate);
+  let shift=document.getElementById('editShift').value || autoShift(editingDate,dayType);
+  if(!SHIFT_RULES[shift]){
+    shift=autoShift(editingDate,'دوام');
+    if(!SHIFT_RULES[shift]) shift='صباحي';
+    document.getElementById('editShift').value=shift;
+  }
+  document.getElementById('editDayType').value='دوام';
+  const rule=SHIFT_RULES[shift];
+  if(mode==='normal'){
+    document.getElementById('editIn').value=rule.normalIn;
+    document.getElementById('editOut').value=rule.normalOut;
+  }else{
+    document.getElementById('editIn').value=rule.extraIn;
+    document.getElementById('editOut').value=rule.extraOut;
+  }
+  updateDayPreview();
+}
 function openDayModal(date){
   editingDate=date; const r=state.records[date]||{};
   document.getElementById('modalDayName').textContent=weekday(date);
@@ -308,7 +400,7 @@ function openDayModal(date){
   document.getElementById('editShift').value=r.shiftOverride||'';
   document.getElementById('editIn').value=r.in||''; document.getElementById('editOut').value=r.out||'';
   document.getElementById('editNotes').value=r.notes||'';
-  updateDayPreview(); document.getElementById('dayModal').classList.add('open');
+  updateQuickButtons(); updateDayPreview(); document.getElementById('dayModal').classList.add('open');
 }
 function closeDayModal(){ document.getElementById('dayModal').classList.remove('open'); editingDate=null; }
 function modalDraft(){
@@ -316,7 +408,7 @@ function modalDraft(){
           in:document.getElementById('editIn').value,out:document.getElementById('editOut').value,notes:document.getElementById('editNotes').value.trim()};
 }
 function updateDayPreview(){
-  if(!editingDate) return; const c=calcDay(editingDate,modalDraft());
+  if(!editingDate) return; updateQuickButtons(); const c=calcDay(editingDate,modalDraft());
   document.getElementById('dayCalcPreview').innerHTML=`
     <div><span>الساعات الفعلية</span><strong>${c.actual===null?'—':hours(c.actual)}</strong></div>
     <div><span>الإضافي</span><strong>${hours(c.ot125+c.ot150)}</strong></div>
@@ -360,6 +452,7 @@ function initInputs(){
   document.querySelectorAll('#dayModal select,#dayModal textarea').forEach(el=>el.addEventListener('input',updateDayPreview));
   document.getElementById('closeModal').addEventListener('click',closeDayModal);
   document.getElementById('dayModal').addEventListener('click',e=>{if(e.target.id==='dayModal')closeDayModal()});
+  document.querySelectorAll('[data-quick-entry]').forEach(b=>b.addEventListener('click',()=>applyQuickEntry(b.dataset.quickEntry)));
   document.getElementById('saveDay').addEventListener('click',saveDay);
   document.getElementById('clearDay').addEventListener('click',()=>{if(editingDate&&confirm('مسح كل إدخال هذا اليوم؟')){delete state.records[editingDate];saveState();closeDayModal();refreshAll();toast('تم مسح إدخال اليوم')}});
 }
@@ -394,7 +487,7 @@ function setupSettingsEvents(){
     catch{alert('الملف غير صالح أو ليس نسخة احتياطية من التطبيق.')} e.target.value='';
   });
   document.getElementById('resetData').addEventListener('click',()=>{
-    if(confirm('سيتم مسح كل التعديلات وإرجاع بيانات ملف الإكسل الأصلية. هل أنت متأكد؟')){state=deepClone(DEFAULT_STATE);saveState();initAfterReset();toast('تمت إعادة البيانات الافتراضية');}
+    if(confirm('سيتم مسح كل البيانات والعودة إلى نسخة فارغة. هل أنت متأكد؟')){state=deepClone(DEFAULT_STATE);saveState();initAfterReset();toast('تمت إعادة التطبيق لنسخة فارغة');}
   });
 }
 function initAfterReset(){

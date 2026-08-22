@@ -21,7 +21,6 @@
       </div>
       <button class="icon-btn" id="installBtn" hidden aria-label="تثبيت التطبيق">＋</button>
     </header>
-
     <main>
       <section class="page active" id="page-home">
         <div class="period-row">
@@ -37,7 +36,6 @@
           <article class="kpi"><span>ساعات الإضافي</span><strong id="kpiOtHours">0.00</strong><small id="kpiOtValue">0.000 د.أ</small></article>
           <article class="kpi"><span>تحتاج مراجعة</span><strong id="kpiReview">0</strong><small>صفوف ناقصة/وقت غير مكتمل</small></article>
         </div>
-
         <div class="section-head">
           <h2>أقرب أيام الدوام</h2>
           <button class="link-btn" data-go="attendance">فتح الدوام</button>
@@ -173,6 +171,17 @@
             <option value="">تلقائي</option><option>صباحي</option><option>مسائي</option><option>عطلة</option>
           </select>
         </label>
+
+        <div class="quick-entry-wrap">
+          <span class="quick-entry-label">اختصار الإدخال</span>
+          <div class="quick-entry-grid">
+            <button type="button" class="quick-entry" data-quick-entry="normal">دوام كامل</button>
+            <button type="button" class="quick-entry" data-quick-entry="extra">كامل + إضافي</button>
+            <button type="button" class="quick-entry" data-quick-entry="manual">إدخال يدوي</button>
+          </div>
+          <small class="quick-entry-hint">استخدم الإدخال اليدوي للمغادرة، التأخير، العطلة الرسمية أو عكس الشفت.</small>
+        </div>
+
         <label>الدخول <select id="editIn"></select></label>
         <label>الخروج <select id="editOut"></select></label>
         <label>ملاحظات <textarea id="editNotes" rows="3" placeholder="اختياري"></textarea></label>
